@@ -258,7 +258,7 @@ button{font-family:inherit;color:inherit;cursor:pointer}
 <div id="settings" class="modal hidden">
   <div class="sheet">
     <h2>⚙️ Settings</h2>
-    <label>Radar range <b id="vRadius"></b><input type="range" id="rRadius" min="20" max="150" step="10"></label>
+    <label>Radar range <b id="vRadius"></b><input type="range" id="rRadius" min="20" max="250" step="10"></label>
     <label>Look ahead <b id="vLook"></b><input type="range" id="rLook" min="5" max="40" step="5"></label>
     <label>Must pass this high in the sky <b id="vElev"></b><input type="range" id="rElev" min="10" max="60" step="5"></label>
     <div class="row">
@@ -527,13 +527,21 @@ const PROXIES = [
   { name: 'codetabs', wrap: u => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u) },
   { name: 'allorigins', wrap: u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u) }
 ];
-let SOURCES = [];
-for (const p of PROXIES) for (const f of FEEDS) SOURCES.push({
-  name: p.name === 'direct' ? f.name : f.name + ' via ' + p.name, feed: f.name,
-  get: async (lat, lon, r) => f.parse(await getJSON(p.wrap(f.url(lat, lon, r)), p.name === 'direct' ? 8000 : 12000))
-});
+// Each feed remembers the route (proxy) that last worked and tries it first.
+async function fetchFeed(f, lat, lon, r, errs) {
+  const order = f.ok ? [f.ok, ...PROXIES.filter(p => p !== f.ok)] : PROXIES;
+  for (const p of order) {
+    const name = p.name === 'direct' ? f.name : f.name + ' via ' + p.name;
+    try {
+      const got = f.parse(await getJSON(p.wrap(f.url(lat, lon, r)), p.name === 'direct' ? 8000 : 12000));
+      f.ok = p;
+      logLine('info', [name + ': ' + got.length + ' planes near ' + lat + ',' + lon + ' r=' + r + 'nm']);
+      return got;
+    } catch (e) { console.warn(name + ' failed', e); errs.push(name + ': ' + (e && e.name) + ' - ' + (e && e.message)); }
+  }
+  return null;
+}
 const viaProxy = u => MY_PROXY ? MY_PROXY + encodeURIComponent(u) : u;
-function preferSource(name) { const i = SOURCES.findIndex(s => s.name === name); if (i > 0) SOURCES.unshift(SOURCES.splice(i, 1)[0]); }
 
 const milSeen = new Set();
 function ingest(list) {
@@ -578,7 +586,7 @@ function ensureLogBox() {
   b.querySelector('#logtext').value = logLines.join('\n');
   b.querySelector('#logclose').onclick = () => b.remove();
   b.querySelector('#logcopy').onclick = async () => {
-    const t = b.querySelector('#logtext'), txt = 'build 11 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
+    const t = b.querySelector('#logtext'), txt = 'build 12 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
     try { await navigator.clipboard.writeText(txt); b.querySelector('#logcopy').textContent = 'Copied!'; }
     catch (e) { t.select(); document.execCommand('copy'); b.querySelector('#logcopy').textContent = 'Copied!'; }
   };
@@ -593,19 +601,18 @@ async function refresh(force) {
   busy = true;
   try {
     lastTry = Date.now();
-    let list = null, empty = null; const errs = [], tried = new Set();
-    const [la, lo] = [me.lat.toFixed(3), me.lon.toFixed(3)];
-    for (const s of SOURCES) {
-      if (tried.has(s.feed)) continue;   // this feed already answered via another route
-      try {
-        const got = await s.get(la, lo, settings.radius);
-        tried.add(s.feed);
-        logLine('info', [s.name + ': ' + got.length + ' planes near ' + la + ',' + lo + ' r=' + settings.radius + 'nm']);
-        if (got.length) { list = got; srcName = s.name; preferSource(s.name); break; }
-        if (!empty) { empty = got; srcName = s.name; }
-      } catch (e) { console.warn(s.name + ' failed', e); errs.push(s.name + ': ' + (e && e.name) + ' - ' + (e && e.message)); }
-    }
-    if (!list && empty) list = empty;
+    // Ask every feed at once and merge them: each network has different receivers,
+    // so together they see more planes than any one of them alone.
+    const errs = [], [la, lo] = [me.lat.toFixed(3), me.lon.toFixed(3)];
+    const r = Math.min(settings.radius, 250);
+    const results = await Promise.all(FEEDS.map(f => fetchFeed(f, la, lo, r, errs)));
+    let list = null; const merged = new Map(), okNames = [];
+    results.forEach((got, i) => {
+      if (!got) return;
+      okNames.push(FEEDS[i].name);
+      for (const n of got) { const o = merged.get(n.hex); if (!o || n.t0 > o.t0) merged.set(n.hex, Object.assign({}, o, n)); }
+    });
+    if (okNames.length) { list = [...merged.values()]; srcName = okNames.length === FEEDS.length ? 'all feeds' : okNames.join(' + '); }
     if (list) {
       failCount = 0;
       if (mode !== 'live') { mode = 'live'; toast('🟢 Live radar is back!'); }
