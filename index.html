@@ -550,7 +550,7 @@ function ensureLogBox() {
   b.querySelector('#logtext').value = logLines.join('\n');
   b.querySelector('#logclose').onclick = () => b.remove();
   b.querySelector('#logcopy').onclick = async () => {
-    const t = b.querySelector('#logtext'), txt = navigator.userAgent + '\n' + t.value;
+    const t = b.querySelector('#logtext'), txt = 'build 7 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
     try { await navigator.clipboard.writeText(txt); b.querySelector('#logcopy').textContent = 'Copied!'; }
     catch (e) { t.select(); document.execCommand('copy'); b.querySelector('#logcopy').textContent = 'Copied!'; }
   };
