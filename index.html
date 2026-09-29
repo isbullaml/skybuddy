@@ -482,35 +482,29 @@ function normAdsb(a) {
     t0: now - (a.seen_pos || 0) * 1000
   };
 }
-const adsbLike = base => async (lat, lon, r) => {
-  const j = await getJSON(`${base}/v2/point/${lat}/${lon}/${r}`);
-  return (j.ac || []).map(normAdsb).filter(Boolean);
-};
-const SOURCES = [
-  { name: 'adsb.lol', get: adsbLike('https://api.adsb.lol') },
-  { name: 'airplanes.live', get: adsbLike('https://api.airplanes.live') },
-  { name: 'adsb.one', get: adsbLike('https://api.adsb.one') },
-  { name: 'adsb.fi', get: async (lat, lon, r) => {
-      const j = await getJSON(`https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${r}`);
-      return (j.aircraft || j.ac || []).map(normAdsb).filter(Boolean);
-  } },
-  { name: 'adsb.lol via proxy', get: async (lat, lon, r) => {
-      const j = await getJSON('https://api.allorigins.win/raw?url=' + encodeURIComponent(`https://api.adsb.lol/v2/point/${lat}/${lon}/${r}`), 12000);
-      return (j.ac || []).map(normAdsb).filter(Boolean);
-  } },
-  { name: 'OpenSky', get: async (lat, lon, r) => {
-      lat = +lat; lon = +lon;
-      const dLat = r * 1.852 / 110.574, dLon = r * 1.852 / (111.32 * Math.cos(rad(lat)));
-      const j = await getJSON(`https://opensky-network.org/api/states/all?lamin=${(lat - dLat).toFixed(3)}&lomin=${(lon - dLon).toFixed(3)}&lamax=${(lat + dLat).toFixed(3)}&lomax=${(lon + dLon).toFixed(3)}`);
-      const now = Date.now();
-      return (j.states || []).filter(s => s[5] != null && s[6] != null && !s[8]).map(s => ({
-        hex: String(s[0]), call: (s[1] || '').trim(), reg: '', type: '', desc: '', op: '', country: s[2] || '',
-        lat: s[6], lon: s[5], alt: Math.round((s[13] != null ? s[13] : (s[7] || 0)) / 0.3048),
-        gs: (s[9] || 0) / KT, trk: s[10] || 0, vr: (s[11] || 0) * 196.85, sq: s[14] || '',
-        t0: s[3] ? s[3] * 1000 : now
-      }));
-  } }
+const pointFeed = base => ({ url: (lat, lon, r) => `${base}/v2/point/${lat}/${lon}/${r}`, parse: j => (j.ac || j.aircraft || []).map(normAdsb).filter(Boolean) });
+const FEEDS = [
+  { name: 'adsb.lol', ...pointFeed('https://api.adsb.lol') },
+  { name: 'airplanes.live', ...pointFeed('https://api.airplanes.live') },
+  { name: 'adsb.fi', url: (lat, lon, r) => `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${r}`, parse: j => (j.aircraft || j.ac || []).map(normAdsb).filter(Boolean) }
 ];
+// Most flight feeds do not allow browser requests from other sites (CORS), so we
+// fall back to CORS relays. Put your own relay (see cors-worker.js) in MY_PROXY
+// for the most reliable setup, e.g. 'https://skybuddy-proxy.you.workers.dev/?url='.
+const MY_PROXY = '';
+const PROXIES = [
+  ...(MY_PROXY ? [{ name: 'my proxy', wrap: u => MY_PROXY + encodeURIComponent(u) }] : []),
+  { name: 'direct', wrap: u => u },
+  { name: 'corsproxy.io', wrap: u => 'https://corsproxy.io/?url=' + encodeURIComponent(u) },
+  { name: 'codetabs', wrap: u => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u) },
+  { name: 'allorigins', wrap: u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u) }
+];
+let SOURCES = [];
+for (const p of PROXIES) for (const f of FEEDS) SOURCES.push({
+  name: p.name === 'direct' ? f.name : f.name + ' via ' + p.name,
+  get: async (lat, lon, r) => f.parse(await getJSON(p.wrap(f.url(lat, lon, r)), p.name === 'direct' ? 8000 : 12000))
+});
+function preferSource(name) { const i = SOURCES.findIndex(s => s.name === name); if (i > 0) SOURCES.unshift(SOURCES.splice(i, 1)[0]); }
 
 function ingest(list) {
   const now = Date.now();
@@ -550,7 +544,7 @@ function ensureLogBox() {
   b.querySelector('#logtext').value = logLines.join('\n');
   b.querySelector('#logclose').onclick = () => b.remove();
   b.querySelector('#logcopy').onclick = async () => {
-    const t = b.querySelector('#logtext'), txt = 'build 7 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
+    const t = b.querySelector('#logtext'), txt = 'build 8 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
     try { await navigator.clipboard.writeText(txt); b.querySelector('#logcopy').textContent = 'Copied!'; }
     catch (e) { t.select(); document.execCommand('copy'); b.querySelector('#logcopy').textContent = 'Copied!'; }
   };
@@ -567,7 +561,7 @@ async function refresh(force) {
     lastTry = Date.now();
     let list = null; const errs = [];
     for (const s of SOURCES) {
-      try { list = await s.get(me.lat.toFixed(3), me.lon.toFixed(3), settings.radius); srcName = s.name; break; }
+      try { list = await s.get(me.lat.toFixed(3), me.lon.toFixed(3), settings.radius); srcName = s.name; preferSource(s.name); break; }
       catch (e) { console.warn(s.name + ' failed', e); errs.push(s.name + ': ' + (e && e.name) + ' - ' + (e && e.message)); }
     }
     if (list) {
