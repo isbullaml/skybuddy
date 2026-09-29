@@ -570,6 +570,16 @@ function enterDemo(auto) {
   if (auto) toast('📡 Live radar unreachable, so here are pretend planes to play with!', 6000);
 }
 
+function showErr(errs) {
+  let b = document.getElementById('errbox');
+  if (!b) {
+    b = document.createElement('div'); b.id = 'errbox';
+    b.style.cssText = 'position:fixed;z-index:5000;left:8px;right:8px;top:70px;background:#fff;border:3px solid #2b2d42;border-radius:12px;padding:8px;font:12px monospace';
+    b.innerHTML = '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>Radar errors (copy &amp; paste)</b><button onclick="this.parentNode.parentNode.remove()">Close</button></div><textarea readonly style="width:100%;height:110px;font:12px monospace" onfocus="this.select()"></textarea>';
+    document.body.appendChild(b);
+  }
+  b.querySelector('textarea').value = new Date().toISOString() + '\n' + navigator.userAgent + '\n' + errs.join('\n');
+}
 /* ---------------- refresh loop ---------------- */
 let busy = false, failCount = 0, lastTry = 0, srcName = '';
 async function refresh(force) {
@@ -580,16 +590,17 @@ async function refresh(force) {
     if (settings.demo) { if (mode !== 'demo') enterDemo(false); return; }
     if (mode === 'demo' && Date.now() - lastTry < 30000) return;
     lastTry = Date.now();
-    let list = null;
+    let list = null; const errs = [];
     for (const s of SOURCES) {
       try { list = await s.get(me.lat.toFixed(3), me.lon.toFixed(3), settings.radius); srcName = s.name; break; }
-      catch (e) { console.warn(s.name + ' failed', e); }
+      catch (e) { console.warn(s.name + ' failed', e); errs.push(s.name + ': ' + (e && e.name) + ' - ' + (e && e.message)); }
     }
     if (list) {
       failCount = 0;
       if (mode !== 'live') { clearPlanes(); mode = 'live'; toast('🟢 Live radar is back!'); }
       ingest(list); setSrc();
     } else {
+      showErr(errs);
       failCount++;
       if (failCount >= 2 && mode !== 'demo') enterDemo(true);
     }
