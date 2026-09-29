@@ -256,7 +256,7 @@ button{font-family:inherit;color:inherit;cursor:pointer}
       <button class="btn paper" id="btnGPS">📡 Use GPS</button>
     </div>
     <button class="btn coral" id="btnCloseSet">Done</button>
-    <div class="fine">Live data: adsb.lol, airplanes.live, OpenSky. Routes and photos: adsbdb. Maps: CARTO, Esri, OpenStreetMap contributors. Ground-level sightings depend on weather and daylight, so look up and enjoy!</div>
+    <div class="fine">Live data: adsb.lol, airplanes.live, adsb.fi. Routes and photos: adsbdb. Maps: Esri, OpenStreetMap contributors. Ground-level sightings depend on weather and daylight, so look up and enjoy!</div>
   </div>
 </div>
 
@@ -488,10 +488,10 @@ const FEEDS = [
   { name: 'airplanes.live', ...pointFeed('https://api.airplanes.live') },
   { name: 'adsb.fi', url: (lat, lon, r) => `https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${r}`, parse: j => (j.aircraft || j.ac || []).map(normAdsb).filter(Boolean) }
 ];
-// Most flight feeds do not allow browser requests from other sites (CORS), so we
-// fall back to CORS relays. Put your own relay (see cors-worker.js) in MY_PROXY
-// for the most reliable setup, e.g. 'https://skybuddy-proxy.you.workers.dev/?url='.
-const MY_PROXY = '';
+// Most flight feeds do not allow browser requests from other sites (CORS).
+// On Vercel, /api/proxy (api/proxy.js) relays them from the same origin;
+// elsewhere (e.g. GitHub Pages) we fall back to public CORS relays.
+const MY_PROXY = location.hostname.endsWith('github.io') ? '' : '/api/proxy?url=';
 const PROXIES = [
   ...(MY_PROXY ? [{ name: 'my proxy', wrap: u => MY_PROXY + encodeURIComponent(u) }] : []),
   { name: 'direct', wrap: u => u },
@@ -504,6 +504,7 @@ for (const p of PROXIES) for (const f of FEEDS) SOURCES.push({
   name: p.name === 'direct' ? f.name : f.name + ' via ' + p.name,
   get: async (lat, lon, r) => f.parse(await getJSON(p.wrap(f.url(lat, lon, r)), p.name === 'direct' ? 8000 : 12000))
 });
+const viaProxy = u => MY_PROXY ? MY_PROXY + encodeURIComponent(u) : u;
 function preferSource(name) { const i = SOURCES.findIndex(s => s.name === name); if (i > 0) SOURCES.unshift(SOURCES.splice(i, 1)[0]); }
 
 function ingest(list) {
@@ -544,7 +545,7 @@ function ensureLogBox() {
   b.querySelector('#logtext').value = logLines.join('\n');
   b.querySelector('#logclose').onclick = () => b.remove();
   b.querySelector('#logcopy').onclick = async () => {
-    const t = b.querySelector('#logtext'), txt = 'build 8 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
+    const t = b.querySelector('#logtext'), txt = 'build 9 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
     try { await navigator.clipboard.writeText(txt); b.querySelector('#logcopy').textContent = 'Copied!'; }
     catch (e) { t.select(); document.execCommand('copy'); b.querySelector('#logcopy').textContent = 'Copied!'; }
   };
@@ -730,8 +731,8 @@ async function loadInfo(p) {
   if (p.infoState) return;
   p.infoState = 'loading'; p.info = {};
   const jobs = [];
-  if (p.call) jobs.push(getJSON('https://api.adsbdb.com/v0/callsign/' + encodeURIComponent(p.call), 7000).then(j => { const fr = j && j.response && j.response.flightroute; if (fr) p.info.route = fr; }).catch(() => {}));
-  jobs.push(getJSON('https://api.adsbdb.com/v0/aircraft/' + encodeURIComponent(p.hex), 7000).then(j => { const a = j && j.response && j.response.aircraft; if (a) p.info.ac = a; }).catch(() => {}));
+  if (p.call) jobs.push(getJSON(viaProxy('https://api.adsbdb.com/v0/callsign/' + encodeURIComponent(p.call)), 7000).then(j => { const fr = j && j.response && j.response.flightroute; if (fr) p.info.route = fr; }).catch(() => {}));
+  jobs.push(getJSON(viaProxy('https://api.adsbdb.com/v0/aircraft/' + encodeURIComponent(p.hex)), 7000).then(j => { const a = j && j.response && j.response.aircraft; if (a) p.info.ac = a; }).catch(() => {}));
   await Promise.all(jobs);
   p.infoState = 'done';
   if (selected === p.hex) renderStatic(p);
