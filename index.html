@@ -501,7 +501,7 @@ const PROXIES = [
 ];
 let SOURCES = [];
 for (const p of PROXIES) for (const f of FEEDS) SOURCES.push({
-  name: p.name === 'direct' ? f.name : f.name + ' via ' + p.name,
+  name: p.name === 'direct' ? f.name : f.name + ' via ' + p.name, feed: f.name,
   get: async (lat, lon, r) => f.parse(await getJSON(p.wrap(f.url(lat, lon, r)), p.name === 'direct' ? 8000 : 12000))
 });
 const viaProxy = u => MY_PROXY ? MY_PROXY + encodeURIComponent(u) : u;
@@ -545,7 +545,7 @@ function ensureLogBox() {
   b.querySelector('#logtext').value = logLines.join('\n');
   b.querySelector('#logclose').onclick = () => b.remove();
   b.querySelector('#logcopy').onclick = async () => {
-    const t = b.querySelector('#logtext'), txt = 'build 9 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
+    const t = b.querySelector('#logtext'), txt = 'build 10 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
     try { await navigator.clipboard.writeText(txt); b.querySelector('#logcopy').textContent = 'Copied!'; }
     catch (e) { t.select(); document.execCommand('copy'); b.querySelector('#logcopy').textContent = 'Copied!'; }
   };
@@ -560,11 +560,19 @@ async function refresh(force) {
   busy = true;
   try {
     lastTry = Date.now();
-    let list = null; const errs = [];
+    let list = null, empty = null; const errs = [], tried = new Set();
+    const [la, lo] = [me.lat.toFixed(3), me.lon.toFixed(3)];
     for (const s of SOURCES) {
-      try { list = await s.get(me.lat.toFixed(3), me.lon.toFixed(3), settings.radius); srcName = s.name; preferSource(s.name); break; }
-      catch (e) { console.warn(s.name + ' failed', e); errs.push(s.name + ': ' + (e && e.name) + ' - ' + (e && e.message)); }
+      if (tried.has(s.feed)) continue;   // this feed already answered via another route
+      try {
+        const got = await s.get(la, lo, settings.radius);
+        tried.add(s.feed);
+        logLine('info', [s.name + ': ' + got.length + ' planes near ' + la + ',' + lo + ' r=' + settings.radius + 'nm']);
+        if (got.length) { list = got; srcName = s.name; preferSource(s.name); break; }
+        if (!empty) { empty = got; srcName = s.name; }
+      } catch (e) { console.warn(s.name + ' failed', e); errs.push(s.name + ': ' + (e && e.name) + ' - ' + (e && e.message)); }
     }
+    if (!list && empty) list = empty;
     if (list) {
       failCount = 0;
       if (mode !== 'live') { mode = 'live'; toast('🟢 Live radar is back!'); }
@@ -577,6 +585,8 @@ async function refresh(force) {
   } finally { busy = false; }
   fastTick(); slowTick();
 }
+$('#pillSrc').style.cursor = 'pointer';
+$('#pillSrc').onclick = () => ensureLogBox();
 function setSrc() {
   $('#pillSrc').textContent = mode === 'live' ? '🟢 LIVE · ' + srcName : '🔴 Radar offline';
 }
