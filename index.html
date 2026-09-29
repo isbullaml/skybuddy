@@ -250,7 +250,6 @@ button{font-family:inherit;color:inherit;cursor:pointer}
     <label>Must pass this high in the sky <b id="vElev"></b><input type="range" id="rElev" min="10" max="60" step="5"></label>
     <div class="row">
       <button class="btn mint" id="btnAlerts"></button>
-      <button class="btn sky" id="btnDemo"></button>
     </div>
     <div class="row">
       <button class="btn" id="btnPick">📌 Set my spot</button>
@@ -276,7 +275,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
 /* ---------------- settings & storage ---------------- */
-const DEFAULTS = { radius: 60, lookahead: 20, minElev: 25, alerts: false, demo: false };
+const DEFAULTS = { radius: 60, lookahead: 20, minElev: 25, alerts: false };
 let settings = Object.assign({}, DEFAULTS);
 let spotted = new Set();
 try { Object.assign(settings, JSON.parse(localStorage.getItem('skybuddy.settings') || '{}')); } catch (e) {}
@@ -420,7 +419,7 @@ function viewZoom(lat, altFt) {
 /* ---------------- planes ---------------- */
 const planes = new Map();
 let selected = null;
-let mode = 'live';          // 'live' | 'demo'
+let mode = 'live';          // 'live' | 'down'
 
 function posNow(p, now) {
   const dt = Math.min((now - p.t0) / 1000, 90);
@@ -512,7 +511,7 @@ function ingest(list) {
     const last = p.trail[p.trail.length - 1];
     if (!last || dist(last, [n.lat, n.lon]) > 0.3) { p.trail.push([n.lat, n.lon]); if (p.trail.length > 60) p.trail.shift(); }
   }
-  for (const p of [...planes.values()]) if (!p.demo && now - p.seen > 45000) removePlane(p);
+  for (const p of [...planes.values()]) if (now - p.seen > 45000) removePlane(p);
 }
 function removePlane(p) {
   if (p.marker) map.removeLayer(p.marker);
@@ -521,65 +520,32 @@ function removePlane(p) {
 }
 function clearPlanes() { for (const p of [...planes.values()]) removePlane(p); }
 
-/* ---------------- demo mode ---------------- */
-const AIRLINES = [['UL', 'SriLankan Airlines'], ['EK', 'Emirates'], ['QR', 'Qatar Airways'], ['SQ', 'Singapore Airlines'], ['AI', 'Air India'], ['TG', 'Thai Airways'], ['6E', 'IndiGo'], ['MH', 'Malaysia Airlines']];
-const ACS = [['Boeing', '777-300ER', 'B77W'], ['Airbus', 'A350-900', 'A359'], ['Airbus', 'A320neo', 'A20N'], ['Boeing', '787-9', 'B789'], ['Airbus', 'A330-300', 'A333'], ['Boeing', '737-800', 'B738']];
-const AIRPORTS = { DXB: ['Dubai', 25.25, 55.36], DOH: ['Doha', 25.27, 51.61], SIN: ['Singapore', 1.36, 103.99], DEL: ['Delhi', 28.56, 77.10], BKK: ['Bangkok', 13.69, 100.75], KUL: ['Kuala Lumpur', 2.75, 101.71], LHR: ['London', 51.47, -0.45], CMB: ['Colombo', 7.18, 79.88], MLE: ['Malé', 4.19, 73.53] };
-let demoN = 1;
-function makeDemo(kind) {
-  const now = Date.now();
-  const al = pick(AIRLINES), ac = pick(ACS);
-  const codes = Object.keys(AIRPORTS); const o = pick(codes); let d = pick(codes); while (d === o) d = pick(codes);
-  const trk = Math.random() * 360, gs = 380 + Math.random() * 120, alt = 8000 + Math.random() * 31000;
-  let lat, lon;
-  if (kind === 'pass') {
-    const T = 45 + Math.random() * settings.lookahead * 60 * 0.9;
-    const off = (Math.random() < 0.35 ? 0 : Math.random() * 14) * (Math.random() < .5 ? -1 : 1);
-    const c = dest(me.lat, me.lon, (trk + 90) % 360, off);
-    [lat, lon] = dest(c[0], c[1], (trk + 180) % 360, gs * KT * T / 1000);
-  } else {
-    [lat, lon] = dest(me.lat, me.lon, Math.random() * 360, Math.random() * settings.radius * 1.852 * 0.95);
-  }
-  const ap = c => ({ iata_code: c, municipality: AIRPORTS[c][0], latitude: AIRPORTS[c][1], longitude: AIRPORTS[c][2] });
-  const letters = () => String.fromCharCode(65 + Math.floor(Math.random() * 26));
-  return {
-    hex: 'demo' + (demoN++), call: al[0] + (100 + Math.floor(Math.random() * 899)), reg: '4R-' + letters() + letters() + letters(),
-    type: ac[2], desc: (ac[0] + ' ' + ac[1]).toUpperCase(), op: al[1], lat, lon, alt: Math.round(alt / 100) * 100, gs, trk,
-    vr: pick([0, 0, 0, 1500, -1500]), sq: '2000', t0: now, seen: now, demo: true, trail: [], demoProg: 0.15 + Math.random() * 0.7,
-    info: { route: { airline: { name: al[1] }, origin: ap(o), destination: ap(d) }, ac: { manufacturer: ac[0], type: ac[1], registration: '4R-' + letters() + letters() + letters() } }
+const logLines = [];
+function logLine(kind, args) {
+  const txt = args.map(a => a instanceof Error ? a.name + ': ' + a.message : (typeof a === 'object' ? (() => { try { return JSON.stringify(a); } catch (e) { return String(a); } })() : String(a))).join(' ');
+  logLines.push(new Date().toISOString().slice(11, 19) + ' [' + kind + '] ' + txt);
+  if (logLines.length > 200) logLines.shift();
+  const t = document.getElementById('logtext'); if (t) { t.value = logLines.join('\n'); t.scrollTop = t.scrollHeight; }
+}
+['warn', 'error'].forEach(k => { const o = console[k].bind(console); console[k] = (...a) => { o(...a); logLine(k, a); }; });
+window.addEventListener('error', e => logLine('error', [e.message + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno]));
+window.addEventListener('unhandledrejection', e => logLine('promise', [e.reason]));
+function ensureLogBox() {
+  let b = document.getElementById('errbox'); if (b) return b;
+  b = document.createElement('div'); b.id = 'errbox';
+  b.style.cssText = 'position:fixed;z-index:5000;left:8px;right:8px;top:70px;background:#fff;border:3px solid #2b2d42;border-radius:12px;padding:8px;font:12px monospace';
+  b.innerHTML = '<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px"><b style="flex:1">Log</b><button id="logcopy">Copy</button><button id="logclose">Close</button></div><textarea id="logtext" readonly style="width:100%;height:120px;font:12px monospace"></textarea>';
+  document.body.appendChild(b);
+  b.querySelector('#logtext').value = logLines.join('\n');
+  b.querySelector('#logclose').onclick = () => b.remove();
+  b.querySelector('#logcopy').onclick = async () => {
+    const t = b.querySelector('#logtext'), txt = navigator.userAgent + '\n' + t.value;
+    try { await navigator.clipboard.writeText(txt); b.querySelector('#logcopy').textContent = 'Copied!'; }
+    catch (e) { t.select(); document.execCommand('copy'); b.querySelector('#logcopy').textContent = 'Copied!'; }
   };
+  return b;
 }
-function demoTick() {
-  const now = Date.now();
-  for (const p of [...planes.values()]) {
-    if (!p.demo) continue;
-    const pos = posNow(p, now);
-    p.lat = pos[0]; p.lon = pos[1];
-    p.alt = clamp(altNow(p, now), 3000, 41000);
-    if (p.alt <= 3000 || p.alt >= 41000) p.vr = 0;
-    p.t0 = now; p.seen = now;
-    if (dist([p.lat, p.lon], [me.lat, me.lon]) > settings.radius * 1.852 * 1.1) removePlane(p);
-  }
-  let i = 0;
-  while (planes.size < 14) { const n = makeDemo(i++ % 2 ? 'pass' : 'random'); planes.set(n.hex, n); }
-  const passing = [...planes.values()].filter(p => p.pr && p.pr.listed).length;
-  if (passing < 2) { const n = makeDemo('pass'); planes.set(n.hex, n); }
-}
-function enterDemo(auto) {
-  clearPlanes(); mode = 'demo'; demoTick(); setSrc();
-  if (auto) toast('📡 Live radar unreachable, so here are pretend planes to play with!', 6000);
-}
-
-function showErr(errs) {
-  let b = document.getElementById('errbox');
-  if (!b) {
-    b = document.createElement('div'); b.id = 'errbox';
-    b.style.cssText = 'position:fixed;z-index:5000;left:8px;right:8px;top:70px;background:#fff;border:3px solid #2b2d42;border-radius:12px;padding:8px;font:12px monospace';
-    b.innerHTML = '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>Radar errors (copy &amp; paste)</b><button onclick="this.parentNode.parentNode.remove()">Close</button></div><textarea readonly style="width:100%;height:110px;font:12px monospace" onfocus="this.select()"></textarea>';
-    document.body.appendChild(b);
-  }
-  b.querySelector('textarea').value = new Date().toISOString() + '\n' + navigator.userAgent + '\n' + errs.join('\n');
-}
+function showErr(errs) { errs.forEach(e => logLine('feed', [e])); ensureLogBox(); }
 /* ---------------- refresh loop ---------------- */
 let busy = false, failCount = 0, lastTry = 0, srcName = '';
 async function refresh(force) {
@@ -587,8 +553,6 @@ async function refresh(force) {
   if (busy) return;
   busy = true;
   try {
-    if (settings.demo) { if (mode !== 'demo') enterDemo(false); return; }
-    if (mode === 'demo' && Date.now() - lastTry < 30000) return;
     lastTry = Date.now();
     let list = null; const errs = [];
     for (const s of SOURCES) {
@@ -597,18 +561,18 @@ async function refresh(force) {
     }
     if (list) {
       failCount = 0;
-      if (mode !== 'live') { clearPlanes(); mode = 'live'; toast('🟢 Live radar is back!'); }
+      if (mode !== 'live') { mode = 'live'; toast('🟢 Live radar is back!'); }
       ingest(list); setSrc();
     } else {
       showErr(errs);
       failCount++;
-      if (failCount >= 2 && mode !== 'demo') enterDemo(true);
+      if (failCount >= 2 && mode !== 'down') { mode = 'down'; setSrc(); toast('📡 Live radar unreachable. Check the error log.', 6000); }
     }
   } finally { busy = false; }
   fastTick(); slowTick();
 }
 function setSrc() {
-  $('#pillSrc').textContent = mode === 'live' ? '🟢 LIVE · ' + srcName : '🎮 DEMO planes';
+  $('#pillSrc').textContent = mode === 'live' ? '🟢 LIVE · ' + srcName : '🔴 Radar offline';
 }
 
 /* ---------------- markers ---------------- */
@@ -758,7 +722,7 @@ function deselect() {
 }
 
 async function loadInfo(p) {
-  if (p.demo || p.infoState) return;
+  if (p.infoState) return;
   p.infoState = 'loading'; p.info = {};
   const jobs = [];
   if (p.call) jobs.push(getJSON('https://api.adsbdb.com/v0/callsign/' + encodeURIComponent(p.call), 7000).then(j => { const fr = j && j.response && j.response.flightroute; if (fr) p.info.route = fr; }).catch(() => {}));
@@ -773,8 +737,7 @@ function routeHTML(p) {
   if (!r || !r.origin || !r.destination) return '<div class="route none">🛫 Route unknown for this flight</div>';
   const o = r.origin, d = r.destination;
   let prog = 0.5;
-  if (p.demoProg != null) prog = p.demoProg;
-  else if (o.latitude != null && d.latitude != null) {
+  if (o.latitude != null && d.latitude != null) {
     const total = dist([o.latitude, o.longitude], [d.latitude, d.longitude]);
     if (total > 1) prog = clamp(dist([o.latitude, o.longitude], [p.lat, p.lon]) / total, 0.05, 0.95);
   }
@@ -889,7 +852,6 @@ const TITLES = ['Cloud Newbie', 'Sky Scout', 'Plane Pal', 'Jet Hunter', 'Ace Spo
 const levelTitle = () => { const l = Math.min(Math.floor(spotted.size / 3), 5); return `Lv ${l + 1} ${TITLES[l]}`; };
 $('#btnSpot').onclick = e => {
   const p = planes.get(selected); if (!p) return;
-  if (p.demo) { toast('Pretend planes do not count 😉'); return; }
   if (spotted.has(p.hex)) { spotted.delete(p.hex); }
   else {
     spotted.add(p.hex);
@@ -905,7 +867,6 @@ function syncSettingsUI() {
   $('#rLook').value = settings.lookahead; $('#vLook').textContent = settings.lookahead + ' min';
   $('#rElev').value = settings.minElev; $('#vElev').textContent = settings.minElev + '° (' + Math.max(1, Math.round(settings.minElev / 10)) + '+ fists)';
   $('#btnAlerts').textContent = settings.alerts ? '🔔 Alerts: ON' : '🔕 Alerts: OFF';
-  $('#btnDemo').textContent = settings.demo ? '🎮 Demo: ON' : '🎮 Demo: OFF';
 }
 $('#btnSettings').onclick = () => { syncSettingsUI(); $('#settings').classList.remove('hidden'); };
 $('#btnCloseSet').onclick = () => $('#settings').classList.add('hidden');
@@ -921,10 +882,6 @@ $('#btnAlerts').onclick = async () => {
     beep(); setWake(true);
     toast('🔔 Alerts on! Keep this tab open and I will beep when a plane is close.');
   } else setWake(false);
-};
-$('#btnDemo').onclick = () => {
-  settings.demo = !settings.demo; save(); syncSettingsUI();
-  if (settings.demo) enterDemo(false); else { clearPlanes(); mode = 'live'; lastTry = 0; refresh(true); }
 };
 $('#btnPick').onclick = () => { $('#settings').classList.add('hidden'); picking = true; map.getContainer().style.cursor = 'crosshair'; toast('📌 Tap the map where you are standing', 5000); };
 $('#btnGPS').onclick = () => {
@@ -959,7 +916,6 @@ async function boot() {
   setInterval(fastTick, 250);
   setInterval(slowTick, 1000);
   setInterval(() => refresh(), 8000);
-  setInterval(() => { if (mode === 'demo') demoTick(); }, 5000);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { fastTick(); if (settings.alerts) setWake(true); } });
 boot();
