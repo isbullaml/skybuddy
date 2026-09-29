@@ -380,7 +380,7 @@ const starIcon = L.divIcon({ className: 'starpin', html: '<div>⭐</div>', iconS
 /* ---------------- maps ---------------- */
 const map = L.map('map', { zoomControl: false, zoomSnap: 0.5 }).setView([me.lat, me.lon], 9);
 map.attributionControl.setPrefix(false);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?api_key=cb1_4307_1_48cf03e461f0f5594e14ecae', {
   subdomains: 'abcd', maxZoom: 18, attribution: '© OpenStreetMap contributors © CARTO'
 }).addTo(map);
 const pathGroup = L.layerGroup().addTo(map);
