@@ -97,6 +97,18 @@ button{font-family:inherit;color:inherit;cursor:pointer}
 .pl.inc .ring{opacity:1;animation:spin 3s linear infinite}
 .pl.sel .ring{opacity:1;border:4px solid var(--grape);animation:pulse 1.2s ease-out infinite}
 .pl.spot .lbl::after{content:' ⭐'}
+.pl.mil{--c:#6b8e23}
+.pl.mil .lbl{background:#6b8e23;color:#fff}
+.pl.mil .lbl::before{content:'🪖 '}
+.card.mil{outline:3px dashed #6b8e23;outline-offset:-7px}
+.iss-wrap{background:none!important;border:0!important}
+.iss{position:relative;width:48px;height:48px;display:grid;place-items:center;font-size:30px;background:#1d1f33;border:3px solid var(--ink);border-radius:50%;box-shadow:0 3px 0 var(--ink)}
+.iss .lbl{position:absolute;top:47px;left:50%;transform:translateX(-50%);font:700 11px/1 var(--font);background:var(--grape);color:#fff;border:2px solid var(--ink);border-radius:999px;padding:2px 6px;white-space:nowrap}
+.passes{display:grid;gap:8px}
+.passc{border:3px solid var(--ink);border-radius:16px;padding:8px 10px;box-shadow:0 3px 0 var(--ink);background:#e9e4ff;display:grid;gap:2px}
+.passc.vis{background:var(--sun)}
+.passc b{font-size:16px} .passc small{font-weight:500}
+.isstat{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-weight:600;font-size:14px}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes pulse{0%{transform:scale(.85);opacity:1}100%{transform:scale(1.5);opacity:0}}
 @keyframes pop{from{transform:scale(0)}to{transform:scale(1)}}
@@ -201,6 +213,7 @@ button{font-family:inherit;color:inherit;cursor:pointer}
   <button class="round" id="btnZoomIn" aria-label="Zoom in">+</button>
   <button class="round" id="btnZoomOut" aria-label="Zoom out">−</button>
   <button class="round" id="btnLocate" aria-label="Center on me">📍</button>
+  <button class="round" id="btnISS" aria-label="Space station passes">🛰️</button>
 </div>
 
 <section class="tray" id="tray">
@@ -250,19 +263,33 @@ button{font-family:inherit;color:inherit;cursor:pointer}
     <label>Must pass this high in the sky <b id="vElev"></b><input type="range" id="rElev" min="10" max="60" step="5"></label>
     <div class="row">
       <button class="btn mint" id="btnAlerts"></button>
+      <button class="btn paper" id="btnMil"></button>
     </div>
     <div class="row">
       <button class="btn" id="btnPick">📌 Set my spot</button>
       <button class="btn paper" id="btnGPS">📡 Use GPS</button>
     </div>
     <button class="btn coral" id="btnCloseSet">Done</button>
-    <div class="fine">Live data: adsb.lol, airplanes.live, adsb.fi. Routes and photos: adsbdb. Maps: Esri, OpenStreetMap contributors. Ground-level sightings depend on weather and daylight, so look up and enjoy!</div>
+    <div class="fine">Live data: adsb.lol, airplanes.live, adsb.fi. 🪖 marks military aircraft. Routes and photos: adsbdb. Maps: Esri, OpenStreetMap contributors. Ground-level sightings depend on weather and daylight, so look up and enjoy!</div>
+  </div>
+</div>
+
+<div id="issModal" class="modal hidden">
+  <div class="sheet">
+    <h2>🛰️ Space Station</h2>
+    <div class="isstat" id="issNow">Loading orbit…</div>
+    <div class="row"><button class="btn grape" id="btnIssFind">🔭 Find ISS on map</button></div>
+    <b>Next passes over you</b>
+    <div class="passes" id="issPasses"></div>
+    <button class="btn coral" id="btnIssClose">Done</button>
+    <div class="fine">🌟 Yellow passes are visible to the naked eye: the sky is dark where you are and the ISS is still lit by the sun. It looks like a bright, steady star gliding across the sky for a few minutes. Orbit data: wheretheiss.at / CelesTrak.</div>
   </div>
 </div>
 
 <div id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@5.0.0/dist/satellite.min.js"></script>
 <script>
 (() => {
 'use strict';
@@ -275,7 +302,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
 /* ---------------- settings & storage ---------------- */
-const DEFAULTS = { radius: 60, lookahead: 20, minElev: 25, alerts: false };
+const DEFAULTS = { radius: 60, lookahead: 20, minElev: 25, alerts: false, milOnly: false };
 let settings = Object.assign({}, DEFAULTS);
 let spotted = new Set();
 try { Object.assign(settings, JSON.parse(localStorage.getItem('skybuddy.settings') || '{}')); } catch (e) {}
@@ -479,7 +506,8 @@ function normAdsb(a) {
     alt: typeof a.alt_baro === 'number' ? a.alt_baro : (a.alt_geom || 0),
     gs: a.gs || 0, trk: a.track != null ? a.track : (a.true_heading || 0),
     vr: a.baro_rate != null ? a.baro_rate : (a.geom_rate || 0), sq: a.squawk || '',
-    t0: now - (a.seen_pos || 0) * 1000
+    t0: now - (a.seen_pos || 0) * 1000,
+    mil: !!((a.dbFlags || 0) & 1)
   };
 }
 const pointFeed = base => ({ url: (lat, lon, r) => `${base}/v2/point/${lat}/${lon}/${r}`, parse: j => (j.ac || j.aircraft || []).map(normAdsb).filter(Boolean) });
@@ -507,11 +535,16 @@ for (const p of PROXIES) for (const f of FEEDS) SOURCES.push({
 const viaProxy = u => MY_PROXY ? MY_PROXY + encodeURIComponent(u) : u;
 function preferSource(name) { const i = SOURCES.findIndex(s => s.name === name); if (i > 0) SOURCES.unshift(SOURCES.splice(i, 1)[0]); }
 
+const milSeen = new Set();
 function ingest(list) {
   const now = Date.now();
+  if (settings.milOnly) list = list.filter(n => n.mil);
   for (const n of list) {
     let p = planes.get(n.hex);
-    if (!p) { p = { hex: n.hex, trail: [], seen: now }; planes.set(n.hex, p); }
+    if (!p) {
+      p = { hex: n.hex, trail: [], seen: now }; planes.set(n.hex, p);
+      if (n.mil && !milSeen.has(n.hex)) { milSeen.add(n.hex); toast('🪖 Military aircraft on radar: ' + (n.call || n.desc || n.hex.toUpperCase()), 5000); }
+    }
     for (const k in n) if (n[k] !== '' && n[k] != null) p[k] = n[k];
     p.seen = now;
     const last = p.trail[p.trail.length - 1];
@@ -545,7 +578,7 @@ function ensureLogBox() {
   b.querySelector('#logtext').value = logLines.join('\n');
   b.querySelector('#logclose').onclick = () => b.remove();
   b.querySelector('#logcopy').onclick = async () => {
-    const t = b.querySelector('#logtext'), txt = 'build 10 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
+    const t = b.querySelector('#logtext'), txt = 'build 11 · ' + location.href + '\n' + navigator.userAgent + '\n' + t.value;
     try { await navigator.clipboard.writeText(txt); b.querySelector('#logcopy').textContent = 'Copied!'; }
     catch (e) { t.select(); document.execCommand('copy'); b.querySelector('#logcopy').textContent = 'Copied!'; }
   };
@@ -605,7 +638,7 @@ function updateMarker(p) {
   const el = p.marker && p.marker.getElement(); if (!el) return;
   const root = el.firstChild;
   const c = p.alt < 10000 ? 'lo' : p.alt < 25000 ? 'mid' : 'hi';
-  const cls = 'pl ' + c + (p.pr && p.pr.listed ? ' inc' : '') + (p.hex === selected ? ' sel' : '') + (spotted.has(p.hex) ? ' spot' : '');
+  const cls = 'pl ' + c + (p.pr && p.pr.listed ? ' inc' : '') + (p.hex === selected ? ' sel' : '') + (spotted.has(p.hex) ? ' spot' : '') + (p.mil ? ' mil' : '');
   if (p._cls !== cls) { root.className = cls; p._cls = cls; }
   root.querySelector('.body').style.transform = `rotate(${p.trk || 0}deg)`;
   const l = root.querySelector('.lbl'), t = p.call || p.hex.toUpperCase();
@@ -635,7 +668,9 @@ function slowTick() {
   }
   list.sort((a, b) => a.pr.tc - b.pr.tc);
   renderTray(list); renderAlert(list); handleAlerts(list); drawPaths(list);
-  $('#pillPlanes').textContent = `✈ ${planes.size} in sky`;
+  const nMil = [...planes.values()].filter(p => p.mil).length;
+  $('#pillPlanes').textContent = `✈ ${planes.size} in sky` + (nMil ? ` · 🪖 ${nMil}` : '');
+  issTick();
   $('#pillSpot').textContent = `⭐ ${spotted.size}`;
   if (selected) { const p = planes.get(selected); if (p) renderDynamic(p); }
 }
@@ -652,9 +687,9 @@ const etaText = pr => pr.raw <= 0 ? 'NOW' : fmtT(pr.tc);
 /* ---------------- tray ---------------- */
 function cardHTML(p) {
   const pr = p.pr;
-  return `<div class="card k-${pr.kind}" data-hex="${esc(p.hex)}">
+  return `<div class="card k-${pr.kind}${p.mil ? ' mil' : ''}" data-hex="${esc(p.hex)}">
     <div class="eta">${etaText(pr)}</div>
-    <div class="mid"><small>${KIND_LABEL[pr.kind]}</small><b>${esc(p.call || p.hex.toUpperCase())}</b><span class="look">${esc(lookText(pr))}</span></div>
+    <div class="mid"><small>${p.mil ? '🪖 MILITARY · ' : ''}${KIND_LABEL[pr.kind]}</small><b>${esc(p.call || p.hex.toUpperCase())}</b><span class="look">${esc(lookText(pr))}</span></div>
     <div class="cmp"><svg viewBox="0 0 24 24" style="transform:rotate(${pr.brg}deg)"><path d="M12 2l8 18-8-5-8 5z" fill="#fffaf0" stroke="#2b2d42" stroke-width="2" stroke-linejoin="round"/></svg><span>${dirName(pr.brg)}</span></div>
   </div>`;
 }
@@ -668,7 +703,7 @@ function renderTray(list) {
     }
     return;
   }
-  const sig = items.map(p => p.hex + p.pr.kind).join(',');
+  const sig = items.map(p => p.hex + p.pr.kind + (p.mil ? 'm' : '')).join(',');
   if (sig !== traySig) { box.innerHTML = items.map(cardHTML).join(''); traySig = sig; }
   for (const p of items) {
     const c = box.querySelector(`[data-hex="${p.hex}"]`); if (!c) continue;
@@ -692,7 +727,7 @@ function handleAlerts(list) {
   for (const p of list) {
     if (p.pr.tc <= 180 && !p.alerted) {
       p.alerted = true;
-      const msg = `${p.call || 'A plane'} passing in ${p.pr.raw <= 0 ? 'seconds' : fmtT(p.pr.tc)} - go outside! ${lookText(p.pr)}`;
+      const msg = `${p.mil ? '🪖 Military ' : ''}${p.call || 'A plane'} passing in ${p.pr.raw <= 0 ? 'seconds' : fmtT(p.pr.tc)} - go outside! ${lookText(p.pr)}`;
       toast('✈️ ' + msg, 6000); beep(); notify('Plane incoming!', msg);
     }
   }
@@ -767,7 +802,7 @@ function routeHTML(p) {
 function renderStatic(p) {
   const r = p.info && p.info.route, ac = p.info && p.info.ac;
   $('#pCall').textContent = p.call || p.hex.toUpperCase();
-  $('#pAirline').textContent = (r && r.airline && r.airline.name) || p.op || p.country || 'Mystery flight';
+  $('#pAirline').textContent = (p.mil ? '🪖 Military · ' : '') + ((r && r.airline && r.airline.name) || p.op || p.country || (p.mil ? 'Air force' : 'Mystery flight'));
   $('#pRoute').innerHTML = routeHTML(p);
   $('#tType').textContent = ac ? [ac.manufacturer, ac.type].filter(Boolean).join(' ') : (p.desc || p.type || 'Unknown');
   $('#tReg').textContent = (ac && ac.registration) || p.reg || '—';
@@ -822,6 +857,138 @@ function updateView(p) {
   el.querySelector('svg').style.transform = `rotate(${th}deg)`;
   el.querySelector('.dst').textContent = `YOU · ${dist(pos, [me.lat, me.lon]).toFixed(0)} km`;
 }
+
+
+/* ---------------- ISS ---------------- */
+const SAT = window.satellite;
+const iss = { rec: null, tleAt: 0, marker: null, track: null, passes: [], passesAt: 0, passesFor: '', alerted: new Set() };
+async function getText(url, ms = 9000) {
+  const ctl = new AbortController(), id = setTimeout(() => ctl.abort(), ms);
+  try { const r = await fetch(url, { signal: ctl.signal }); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.text(); }
+  finally { clearTimeout(id); }
+}
+async function loadTLE() {
+  if (!SAT) { console.warn('ISS: satellite.js did not load'); return; }
+  if (iss.rec && Date.now() - iss.tleAt < 6 * 3600e3) return;
+  let l1, l2;
+  try {
+    const j = await getJSON(viaProxy('https://api.wheretheiss.at/v1/satellites/25544/tles'));
+    l1 = j.line1; l2 = j.line2;
+  } catch (e) {
+    console.warn('ISS TLE (wheretheiss) failed', e);
+    try {
+      const t = (await getText(viaProxy('https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=TLE'))).trim().split(/\r?\n/);
+      l1 = t.find(x => x.startsWith('1 ')); l2 = t.find(x => x.startsWith('2 '));
+    } catch (e2) { console.warn('ISS TLE (celestrak) failed', e2); return; }
+  }
+  if (!l1 || !l2) return;
+  iss.rec = SAT.twoline2satrec(l1.trim(), l2.trim()); iss.tleAt = Date.now(); iss.passesAt = 0;
+}
+function issAt(date) {
+  const pv = SAT.propagate(iss.rec, date);
+  if (!pv || !pv.position) return null;
+  const gmst = SAT.gstime(date), gd = SAT.eciToGeodetic(pv.position, gmst);
+  return { eci: pv.position, vel: pv.velocity, gmst, lat: SAT.degreesLat(gd.latitude), lon: SAT.degreesLong(gd.longitude), alt: gd.height };
+}
+const observer = () => ({ latitude: rad(me.lat), longitude: rad(me.lon), height: 0.02 });
+function sunEci(date) {   // unit vector, low-precision solar position
+  const n = date.getTime() / 86400000 + 2440587.5 - 2451545;
+  const g = rad(357.528 + 0.9856003 * n), lam = rad(280.460 + 0.9856474 * n + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g));
+  const eps = rad(23.439 - 0.0000004 * n);
+  return { x: Math.cos(lam), y: Math.cos(eps) * Math.sin(lam), z: Math.sin(eps) * Math.sin(lam) };
+}
+function sunElev(date) {
+  const s = sunEci(date), AU = 1.496e8, gmst = SAT.gstime(date);
+  return deg(SAT.ecfToLookAngles(observer(), SAT.eciToEcf({ x: s.x * AU, y: s.y * AU, z: s.z * AU }, gmst)).elevation);
+}
+function sunlit(eci, date) {   // cylindrical Earth-shadow test
+  const s = sunEci(date), d = eci.x * s.x + eci.y * s.y + eci.z * s.z;
+  if (d > 0) return true;
+  const px = eci.x - d * s.x, py = eci.y - d * s.y, pz = eci.z - d * s.z;
+  return Math.hypot(px, py, pz) > 6371;
+}
+function look(date) {
+  const p = issAt(date); if (!p) return null;
+  const la = SAT.ecfToLookAngles(observer(), SAT.eciToEcf(p.eci, p.gmst));
+  return { el: deg(la.elevation), az: (deg(la.azimuth) + 360) % 360, p };
+}
+function computePasses() {
+  const out = [], t0 = Date.now(), step = 20000, end = t0 + 3 * 86400e3;
+  let cur = null;
+  for (let t = t0; t < end && out.length < 8; t += step) {
+    const d = new Date(t), L = look(d); if (!L) continue;
+    if (L.el >= 10) {
+      if (!cur) cur = { start: t, startAz: L.az, max: L.el, maxT: t, maxAz: L.az, vis: false, day: sunElev(d) > -6 };
+      if (L.el > cur.max) { cur.max = L.el; cur.maxT = t; cur.maxAz = L.az; cur.day = sunElev(d) > -6; }
+      if (!cur.vis && sunlit(L.p.eci, d) && sunElev(d) < -6) cur.vis = true;
+      cur.end = t; cur.endAz = L.az;
+    } else if (cur) { out.push(cur); cur = null; }
+  }
+  if (cur) out.push(cur);
+  iss.passes = out; iss.passesAt = Date.now(); iss.passesFor = me.lat.toFixed(2) + ',' + me.lon.toFixed(2);
+}
+const ISS_ICON = () => L.divIcon({ className: 'iss-wrap', html: '<div class="iss">🛰️<div class="lbl">ISS</div></div>', iconSize: [48, 48], iconAnchor: [24, 24] });
+function splitTrack(pts) {   // break the line where it crosses the date line
+  const segs = [[]];
+  for (let i = 0; i < pts.length; i++) {
+    if (i && Math.abs(pts[i][1] - pts[i - 1][1]) > 180) segs.push([]);
+    segs[segs.length - 1].push(pts[i]);
+  }
+  return segs;
+}
+function issTick() {
+  if (!iss.rec) return;
+  const now = new Date(), p = issAt(now); if (!p) return;
+  if (!iss.marker) {
+    iss.marker = L.marker([p.lat, p.lon], { icon: ISS_ICON(), zIndexOffset: 900 }).addTo(map);
+    iss.marker.on('click', openISS);
+  } else iss.marker.setLatLng([p.lat, p.lon]);
+  if (!iss.track || now - iss.trackAt > 60000) {
+    const pts = [];
+    for (let m = 0; m <= 95; m += 1) { const q = issAt(new Date(+now + m * 60000)); if (q) pts.push([q.lat, q.lon]); }
+    if (iss.track) map.removeLayer(iss.track);
+    iss.track = L.polyline(splitTrack(pts), { color: '#7b5cff', weight: 3, dashArray: '2 8', opacity: .7, interactive: false }).addTo(map);
+    iss.trackAt = +now;
+  }
+  const here = me.lat.toFixed(2) + ',' + me.lon.toFixed(2);
+  if (!iss.passesAt || Date.now() - iss.passesAt > 30 * 60000 || iss.passesFor !== here) computePasses();
+  iss.passes = iss.passes.filter(x => x.end > Date.now() - 60000);
+  for (const ps of iss.passes) {
+    const dt = (ps.start - Date.now()) / 1000;
+    if (ps.vis && dt <= 300 && dt > -60 && !iss.alerted.has(ps.start)) {
+      iss.alerted.add(ps.start);
+      const msg = `The ISS rises in the ${dirName(ps.startAz)} ${dt > 0 ? 'in ' + fmtT(dt) : 'now'}, highest ${Math.round(ps.max)}° in the ${dirName(ps.maxAz)}. Look for a bright moving star!`;
+      toast('🛰️ ' + msg, 8000); beep(); notify('ISS passing over you!', msg);
+    }
+  }
+  if (!$('#issModal').classList.contains('hidden')) renderISS(p);
+}
+const hhmm = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const dayName = t => { const d = new Date(t), n = new Date(); const dd = Math.round((new Date(d.toDateString()) - new Date(n.toDateString())) / 864e5); return dd === 0 ? 'Today' : dd === 1 ? 'Tomorrow' : d.toLocaleDateString([], { weekday: 'long' }); };
+function renderISS(p) {
+  const km = dist([me.lat, me.lon], [p.lat, p.lon]);
+  const spd = Math.hypot(p.vel.x, p.vel.y, p.vel.z) * 3600;
+  $('#issNow').innerHTML = `<span>🏔️ ${fmt(p.alt)} km up</span><span>💨 ${fmt(spd)} km/h</span><span>📏 ${fmt(km)} km from you</span><span>🌍 ${p.lat.toFixed(1)}°, ${p.lon.toFixed(1)}°</span>`;
+  const sig = iss.passes.map(x => x.start).join(',');
+  if ($('#issPasses').dataset.sig === sig) return;
+  $('#issPasses').dataset.sig = sig;
+  $('#issPasses').innerHTML = iss.passes.length ? iss.passes.map(x => {
+    const fists = Math.max(1, Math.round(x.max / 10));
+    return `<div class="passc${x.vis ? ' vis' : ''}"><b>${x.vis ? '👀' : x.day ? '☀️' : '🌑'} ${dayName(x.start)} ${hhmm(x.start)}</b>
+      <small>${fmtT((x.end - x.start) / 1000)} long · from ${dirName(x.startAz)} to ${dirName(x.endAz)} · highest ${Math.round(x.max)}° (${fists} fist${fists > 1 ? 's' : ''}) in the ${dirName(x.maxAz)}</small>
+      <small>${x.vis ? '🌟 Visible to the naked eye!' : x.day ? 'Daylight, sky too bright to see it' : 'ISS is in Earth\'s shadow, too dark to see'}</small></div>`;
+  }).join('') : '<div class="fine">No passes above 10° in the next 3 days.</div>';
+}
+async function openISS() {
+  $('#issModal').classList.remove('hidden');
+  if (!iss.rec) { $('#issNow').textContent = 'Loading orbit…'; await loadTLE(); }
+  if (!iss.rec) { $('#issNow').textContent = 'Could not load ISS orbit data. Tap the radar pill to see the log.'; return; }
+  const p = issAt(new Date()); if (p) { if (!iss.passesAt) computePasses(); renderISS(p); }
+}
+$('#btnISS').onclick = openISS;
+$('#btnIssClose').onclick = () => $('#issModal').classList.add('hidden');
+$('#issModal').onclick = e => { if (e.target.id === 'issModal') $('#issModal').classList.add('hidden'); };
+$('#btnIssFind').onclick = () => { if (iss.marker) { $('#issModal').classList.add('hidden'); map.setView(iss.marker.getLatLng(), 4); } };
 
 /* ---------------- location ---------------- */
 let watchId = null;
@@ -883,7 +1050,9 @@ function syncSettingsUI() {
   $('#rLook').value = settings.lookahead; $('#vLook').textContent = settings.lookahead + ' min';
   $('#rElev').value = settings.minElev; $('#vElev').textContent = settings.minElev + '° (' + Math.max(1, Math.round(settings.minElev / 10)) + '+ fists)';
   $('#btnAlerts').textContent = settings.alerts ? '🔔 Alerts: ON' : '🔕 Alerts: OFF';
+  $('#btnMil').textContent = settings.milOnly ? '🪖 Military only' : '✈️ All aircraft';
 }
+$('#btnMil').onclick = () => { settings.milOnly = !settings.milOnly; save(); syncSettingsUI(); clearPlanes(); refresh(true); toast(settings.milOnly ? '🪖 Showing military aircraft only' : '✈️ Showing all aircraft'); };
 $('#btnSettings').onclick = () => { syncSettingsUI(); $('#settings').classList.remove('hidden'); };
 $('#btnCloseSet').onclick = () => $('#settings').classList.add('hidden');
 $('#settings').onclick = e => { if (e.target.id === 'settings') $('#settings').classList.add('hidden'); };
@@ -932,6 +1101,8 @@ async function boot() {
   setInterval(fastTick, 250);
   setInterval(slowTick, 1000);
   setInterval(() => refresh(), 8000);
+  loadTLE().then(issTick);
+  setInterval(loadTLE, 3600e3);
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { fastTick(); if (settings.alerts) setWake(true); } });
 boot();

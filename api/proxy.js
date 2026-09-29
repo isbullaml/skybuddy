@@ -1,7 +1,7 @@
 // Sky Buddy relay: a Vercel serverless function at /api/proxy?url=...
 // The page and this function share one origin on Vercel, so the browser's
 // CORS rule never applies. Only the flight-data hosts below are relayed.
-const ALLOWED_HOSTS = ['api.adsb.lol', 'api.airplanes.live', 'opendata.adsb.fi', 'api.adsbdb.com'];
+const ALLOWED_HOSTS = ['api.adsb.lol', 'api.airplanes.live', 'opendata.adsb.fi', 'api.adsbdb.com', 'api.wheretheiss.at', 'celestrak.org'];
 
 module.exports = async (req, res) => {
   let target;
