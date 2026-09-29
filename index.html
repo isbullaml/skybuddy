@@ -483,6 +483,11 @@ const adsbLike = base => async (lat, lon, r) => {
 const SOURCES = [
   { name: 'adsb.lol', get: adsbLike('https://api.adsb.lol') },
   { name: 'airplanes.live', get: adsbLike('https://api.airplanes.live') },
+  { name: 'adsb.one', get: adsbLike('https://api.adsb.one') },
+  { name: 'adsb.fi', get: async (lat, lon, r) => {
+      const j = await getJSON(`https://opendata.adsb.fi/api/v2/lat/${lat}/lon/${lon}/dist/${r}`);
+      return (j.aircraft || j.ac || []).map(normAdsb).filter(Boolean);
+  } },
   { name: 'OpenSky', get: async (lat, lon, r) => {
       lat = +lat; lon = +lon;
       const dLat = r * 1.852 / 110.574, dLon = r * 1.852 / (111.32 * Math.cos(rad(lat)));
